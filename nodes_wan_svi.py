@@ -25,7 +25,8 @@ class WanSVIImageToVideo(io.ComfyNode):
                 io.Int.Input("batch_size", default=1, min=1, max=4096),
                 io.ClipVisionOutput.Input("clip_vision_output", optional=True),
                 io.Image.Input("start_image", optional=True),
-                io.Image.Input("control_images", optional=True),
+                io.Image.Input("motion_frames", optional=True),
+                io.Int.Input("num_motion_frames", default=5, min=0, max=20, step=1),
                 io.Latent.Input("prev_latent", optional=True),
                 io.Int.Input("overlap_frames", default=9, min=0, max=40, step=1),
             ],
@@ -38,7 +39,8 @@ class WanSVIImageToVideo(io.ComfyNode):
 
     @classmethod
     def execute(cls, positive, negative, vae, width, height, length, batch_size, 
-                start_image=None, clip_vision_output=None, control_images=None, 
+                start_image=None, clip_vision_output=None,
+                motion_frames=None, num_motion_frames=5,
                 prev_latent=None, overlap_frames=9) -> io.NodeOutput:
         
         latent = torch.zeros([batch_size, 16, ((length - 1) // 4) + 1, height // 8, width // 8], 
@@ -48,13 +50,14 @@ class WanSVIImageToVideo(io.ComfyNode):
         
         if prev_latent is not None:
             prev_samples = prev_latent["samples"]
-            overlap_latent_frames = ((overlap_frames - 1) // 4) + 1
-            if prev_samples.shape[2] >= overlap_latent_frames:
+            overlap_latent_frames = ((overlap_frames - 1) // 4) + 1 if overlap_frames > 0 else 0
+            if overlap_latent_frames > 0 and prev_samples.shape[2] >= overlap_latent_frames:
                 latent[:, :, :overlap_latent_frames] = prev_samples[:, :, -overlap_latent_frames:]
         
-        if control_images is not None:
-            control_images = comfy.utils.common_upscale(control_images[:length].movedim(-1, 1), width, height, "bilinear", "center").movedim(1, -1)
-            image[:control_images.shape[0]] = control_images[:, :, :, :3]
+        if motion_frames is not None and num_motion_frames > 0:
+            motion_frames = motion_frames[-num_motion_frames:]
+            motion_frames = comfy.utils.common_upscale(motion_frames.movedim(-1, 1), width, height, "area", "center").movedim(1, -1)
+            image[:motion_frames.shape[0]] = motion_frames[:, :, :, :3]
         elif start_image is not None:
             start_image = comfy.utils.common_upscale(start_image[:length].movedim(-1, 1), width, height, "bilinear", "center").movedim(1, -1)
             image[:start_image.shape[0]] = start_image[:, :, :, :3]
@@ -63,14 +66,14 @@ class WanSVIImageToVideo(io.ComfyNode):
         mask = torch.ones((1, 1, latent.shape[2], concat_latent_image.shape[-2], concat_latent_image.shape[-1]), 
                          device=comfy.model_management.intermediate_device())
         
-        if control_images is not None:
-            control_frames = control_images.shape[0]
-            mask[:, :, :((control_frames - 1) // 4) + 1] = 0.0
+        if motion_frames is not None and num_motion_frames > 0:
+            motion_latent_frames = ((motion_frames.shape[0] - 1) // 4) + 1
+            mask[:, :, :motion_latent_frames] = 0.0
         elif start_image is not None:
             start_frames = start_image.shape[0]
             mask[:, :, :((start_frames - 1) // 4) + 1] = 0.0
         
-        if prev_latent is not None:
+        if prev_latent is not None and overlap_frames > 0:
             overlap_latent_frames = ((overlap_frames - 1) // 4) + 1
             mask[:, :, :overlap_latent_frames] = 0.0
 
@@ -142,39 +145,6 @@ class SVIExtractLastImages(io.ComfyNode):
         return io.NodeOutput(last_images)
 
 
-class SVIPaddingControl(io.ComfyNode):
-    @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="SVIPaddingControl",
-            category="image",
-            inputs=[
-                io.Image.Input("prev_end_frames"),
-                io.Int.Input("total_length", default=81, min=1, max=nodes.MAX_RESOLUTION, step=4),
-                io.Int.Input("overlap_frames", default=9, min=0, max=81, step=1),
-                io.Float.Input("padding_value", default=0.5, min=0.0, max=1.0, step=0.01),
-            ],
-            outputs=[
-                io.Image.Output(display_name="control_images"),
-            ],
-        )
-
-    @classmethod
-    def execute(cls, prev_end_frames, total_length, overlap_frames, padding_value) -> io.NodeOutput:
-        device = prev_end_frames.device
-        dtype = prev_end_frames.dtype
-        height = prev_end_frames.shape[1]
-        width = prev_end_frames.shape[2]
-        channels = prev_end_frames.shape[3]
-        
-        control_images = torch.ones((total_length, height, width, channels), device=device, dtype=dtype) * padding_value
-        
-        actual_overlap = min(overlap_frames, prev_end_frames.shape[0])
-        control_images[:actual_overlap] = prev_end_frames[-actual_overlap:]
-        
-        return io.NodeOutput(control_images)
-
-
 class WanSVIExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
@@ -182,7 +152,6 @@ class WanSVIExtension(ComfyExtension):
             WanSVIImageToVideo,
             SVIExtractLastFrames,
             SVIExtractLastImages,
-            SVIPaddingControl,
         ]
 
 async def comfy_entrypoint() -> WanSVIExtension:
