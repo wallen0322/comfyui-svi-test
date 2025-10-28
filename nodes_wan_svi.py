@@ -115,12 +115,68 @@ class SVIExtractLastFrames(io.ComfyNode):
         return io.NodeOutput(out)
 
 
+class SVIExtractLastImages(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="SVIExtractLastImages",
+            category="image",
+            inputs=[
+                io.Image.Input("images"),
+                io.Int.Input("num_frames", default=9, min=1, max=81, step=4),
+            ],
+            outputs=[
+                io.Image.Output(display_name="last_images"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, images, num_frames) -> io.NodeOutput:
+        last_images = images[-num_frames:].clone()
+        return io.NodeOutput(last_images)
+
+
+class SVIPaddingControl(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="SVIPaddingControl",
+            category="image",
+            inputs=[
+                io.Image.Input("prev_end_frames"),
+                io.Int.Input("total_length", default=81, min=1, max=nodes.MAX_RESOLUTION, step=4),
+                io.Int.Input("overlap_frames", default=9, min=1, max=81, step=4),
+                io.Float.Input("padding_value", default=0.5, min=0.0, max=1.0, step=0.01),
+            ],
+            outputs=[
+                io.Image.Output(display_name="control_images"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, prev_end_frames, total_length, overlap_frames, padding_value) -> io.NodeOutput:
+        device = prev_end_frames.device
+        dtype = prev_end_frames.dtype
+        height = prev_end_frames.shape[1]
+        width = prev_end_frames.shape[2]
+        channels = prev_end_frames.shape[3]
+        
+        control_images = torch.ones((total_length, height, width, channels), device=device, dtype=dtype) * padding_value
+        
+        actual_overlap = min(overlap_frames, prev_end_frames.shape[0])
+        control_images[:actual_overlap] = prev_end_frames[-actual_overlap:]
+        
+        return io.NodeOutput(control_images)
+
+
 class WanSVIExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return [
             WanSVIImageToVideo,
             SVIExtractLastFrames,
+            SVIExtractLastImages,
+            SVIPaddingControl,
         ]
 
 async def comfy_entrypoint() -> WanSVIExtension:
