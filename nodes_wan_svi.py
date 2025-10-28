@@ -27,7 +27,7 @@ class WanSVIImageToVideo(io.ComfyNode):
                 io.Image.Input("start_image", optional=True),
                 io.Image.Input("control_images", optional=True),
                 io.Latent.Input("prev_latent", optional=True),
-                io.Int.Input("overlap_frames", default=9, min=1, max=40, step=4),
+                io.Int.Input("overlap_frames", default=9, min=0, max=40, step=1),
             ],
             outputs=[
                 io.Conditioning.Output(display_name="positive"),
@@ -100,7 +100,7 @@ class SVIExtractLastFrames(io.ComfyNode):
             category="latent",
             inputs=[
                 io.Latent.Input("samples"),
-                io.Int.Input("num_frames", default=9, min=1, max=81, step=4),
+                io.Int.Input("num_frames", default=9, min=0, max=81, step=1),
             ],
             outputs=[
                 io.Latent.Output(display_name="last_frames"),
@@ -109,6 +109,9 @@ class SVIExtractLastFrames(io.ComfyNode):
 
     @classmethod
     def execute(cls, samples, num_frames) -> io.NodeOutput:
+        if num_frames == 0:
+            out = {"samples": torch.zeros_like(samples["samples"][:, :, :0])}
+            return io.NodeOutput(out)
         latent_frames = ((num_frames - 1) // 4) + 1
         last_latent = samples["samples"][:, :, -latent_frames:].clone()
         out = {"samples": last_latent}
@@ -123,7 +126,7 @@ class SVIExtractLastImages(io.ComfyNode):
             category="image",
             inputs=[
                 io.Image.Input("images"),
-                io.Int.Input("num_frames", default=9, min=1, max=81, step=4),
+                io.Int.Input("num_frames", default=9, min=0, max=81, step=1),
             ],
             outputs=[
                 io.Image.Output(display_name="last_images"),
@@ -132,6 +135,9 @@ class SVIExtractLastImages(io.ComfyNode):
 
     @classmethod
     def execute(cls, images, num_frames) -> io.NodeOutput:
+        if num_frames == 0:
+            last_images = images[:0].clone()
+            return io.NodeOutput(last_images)
         last_images = images[-num_frames:].clone()
         return io.NodeOutput(last_images)
 
@@ -145,7 +151,7 @@ class SVIPaddingControl(io.ComfyNode):
             inputs=[
                 io.Image.Input("prev_end_frames"),
                 io.Int.Input("total_length", default=81, min=1, max=nodes.MAX_RESOLUTION, step=4),
-                io.Int.Input("overlap_frames", default=9, min=1, max=81, step=4),
+                io.Int.Input("overlap_frames", default=9, min=0, max=81, step=1),
                 io.Float.Input("padding_value", default=0.5, min=0.0, max=1.0, step=0.01),
             ],
             outputs=[
